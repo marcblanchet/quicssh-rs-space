@@ -75,7 +75,7 @@ fn configure_client(dtnoption: bool) -> Result<ClientConfig, Box<dyn Error>> {
     let mut client_config = ClientConfig::new(Arc::new(crypto));
     let mut transport_config = enable_mtud_if_supported();
     transport_config.max_idle_timeout(Some(VarInt::from_u32(60_000).into()));
-    //transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(1)));
+    transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(1)));
     if dtnoption {
         transport_config.max_idle_timeout(Some(VarInt::MAX.into()));
         transport_config.initial_rtt(Duration::new(100000, 0));
@@ -86,6 +86,7 @@ fn configure_client(dtnoption: bool) -> Result<ClientConfig, Box<dyn Error>> {
         transport_config.stream_receive_window(VarInt::MAX);
         transport_config.congestion_controller_factory(
             Arc::new(quinn::congestion::NoCCConfig::default()));
+        transport_config.keep_alive_interval(Option::None);
         //let mut ack_frequency_config = quinn::AckFrequencyConfig::default();
         //ack_frequency_config.max_ack_delay(Some(Duration::MAX));
         //transport_config.ack_frequency_config(Some(ack_frequency_config));
