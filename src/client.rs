@@ -3,6 +3,7 @@
 use clap::Parser;
 use quinn::{ClientConfig, Endpoint, VarInt};
 use std::{error::Error, net::SocketAddr, net::ToSocketAddrs, sync::Arc};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[cfg(not(windows))]
@@ -22,10 +23,15 @@ pub struct Opt {
     /// Client address
     #[clap(long = "bind", short = 'b')]
     bind_addr: Option<SocketAddr>,
+
+    // sets many transport config parameters to very large values (such as ::MAX) to handle
+    // deep space usage, where delays and disruptions can be in order of minutes, hours, days
+    #[clap(long = "dtn")]
+    dtn: bool,
 }
 
 /// Enables MTUD if supported by the operating system
-#[cfg(not(any(windows, os = "linux")))]
+//#[cfg(not(any(windows, os = "linux")))]
 pub fn enable_mtud_if_supported() -> quinn::TransportConfig {
     quinn::TransportConfig::default()
 }
@@ -60,7 +66,7 @@ impl rustls::client::ServerCertVerifier for SkipServerVerification {
     }
 }
 
-fn configure_client() -> Result<ClientConfig, Box<dyn Error>> {
+fn configure_client(dtnoption: bool) -> Result<ClientConfig, Box<dyn Error>> {
     let crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_custom_certificate_verifier(SkipServerVerification::new())
@@ -69,7 +75,27 @@ fn configure_client() -> Result<ClientConfig, Box<dyn Error>> {
     let mut client_config = ClientConfig::new(Arc::new(crypto));
     let mut transport_config = enable_mtud_if_supported();
     transport_config.max_idle_timeout(Some(VarInt::from_u32(60_000).into()));
-    transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(1)));
+    //transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(1)));
+    if dtnoption {
+        transport_config.max_idle_timeout(Some(VarInt::MAX.into()));
+        transport_config.initial_rtt(Duration::new(100000, 0));
+        transport_config.receive_window(VarInt::MAX);
+        transport_config.datagram_send_buffer_size(usize::MAX);
+        transport_config.send_window(u64::MAX);
+        transport_config.datagram_receive_buffer_size(Option::Some(usize::MAX));
+        transport_config.stream_receive_window(VarInt::MAX);
+        transport_config.congestion_controller_factory(
+            Arc::new(quinn::congestion::NoCCConfig::default()));
+        //let mut ack_frequency_config = quinn::AckFrequencyConfig::default();
+        //ack_frequency_config.max_ack_delay(Some(Duration::MAX));
+        //transport_config.ack_frequency_config(Some(ack_frequency_config));
+        // disable mtu discovery
+        let mut mtu_discovery_config = quinn::MtuDiscoveryConfig::default();
+        mtu_discovery_config.upper_bound(1200);  //should be INITIAL_MTU
+        mtu_discovery_config.interval(Duration::new(1000000,0));
+        transport_config.mtu_discovery_config(Some(mtu_discovery_config));
+        // connection_id pool
+    }
     client_config.transport_config(Arc::new(transport_config));
 
     Ok(client_config)
@@ -81,8 +107,8 @@ fn configure_client() -> Result<ClientConfig, Box<dyn Error>> {
 ///
 /// - server_certs: list of trusted certificates.
 #[allow(unused)]
-pub fn make_client_endpoint(bind_addr: SocketAddr) -> Result<Endpoint, Box<dyn Error>> {
-    let client_cfg = configure_client()?;
+pub fn make_client_endpoint(bind_addr: SocketAddr, dtnoption: bool) -> Result<Endpoint, Box<dyn Error>> {
+    let client_cfg = configure_client(dtnoption)?;
     let mut endpoint = Endpoint::client(bind_addr)?;
     endpoint.set_default_client_config(client_cfg);
     Ok(endpoint)
@@ -111,7 +137,7 @@ pub async fn run(options: Opt) -> Result<(), Box<dyn Error>> {
         .parse()
         .unwrap(),
         Some(local) => local,
-    })?;
+    }, options.dtn)?;
     // connect to server
     let connection = endpoint
         .connect(remote, url.host_str().unwrap_or("localhost"))
